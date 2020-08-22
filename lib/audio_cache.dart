@@ -106,7 +106,7 @@ class AudioCache {
       bool isNotification,
       PlayerMode mode = PlayerMode.MEDIA_PLAYER,
       bool stayAwake,
-      bool recordingActive,
+      bool recordingActive, Duration position,
   }) async {
     String url = await getAbsoluteUrl(fileName);
     AudioPlayer player = _player(mode);
@@ -115,6 +115,7 @@ class AudioCache {
       volume: volume,
       respectSilence: isNotification ?? respectSilence,
       stayAwake: stayAwake,
+      position: position,
       recordingActive: recordingActive,
     );
     return player;
