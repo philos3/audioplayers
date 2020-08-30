@@ -69,6 +69,11 @@ enum PlayerMode {
   LOW_LATENCY
 }
 
+enum PlayerControlCommand {
+  NEXT_TRACK,
+  PREVIOUS_TRACK,
+}
+
 // When we start the background service isolate, we only ever enter it once.
 // To communicate between the native plugin and this entrypoint, we'll use
 // MethodChannels to open a persistent communication channel to trigger
@@ -155,6 +160,9 @@ class AudioPlayer {
   final StreamController<String> _errorController =
       StreamController<String>.broadcast();
 
+  final StreamController<PlayerControlCommand> _commandController =
+      StreamController<PlayerControlCommand>.broadcast();
+
   PlayingRouteState _playingRouteState = PlayingRouteState.SPEAKERS;
 
   /// Reference [Map] with all the players created by the application.
@@ -225,6 +233,11 @@ class AudioPlayer {
   ///
   /// Events are sent when an unexpected error is thrown in the native code.
   Stream<String> get onPlayerError => _errorController.stream;
+
+  /// Stream of remote player command send by native side
+  ///
+  /// Events are sent user tap system remote control command.
+  Stream<PlayerControlCommand> get onPlayerCommand => _commandController.stream;
 
   /// Handler of changes on player state.
   @deprecated
@@ -363,14 +376,16 @@ class AudioPlayer {
   /// If [isLocal] is false, [url] must be a remote URL.
   ///
   /// respectSilence and stayAwake are not implemented on macOS.
-  Future<int> play(String url,
-      {bool isLocal,
-      double volume = 1.0,
-      // position must be null by default to be compatible with radio streams
-      Duration position,
-      bool respectSilence = false,
-      bool stayAwake = false,
-      bool recordingActive = false}) async {
+  Future<int> play(
+    String url, {
+    bool isLocal,
+    double volume = 1.0,
+    // position must be null by default to be compatible with radio streams
+    Duration position,
+    bool respectSilence = false,
+    bool stayAwake = false,
+    bool recordingActive = false,
+  }) async {
     isLocal ??= isLocalUrl(url);
     volume ??= 1.0;
     respectSilence ??= false;
@@ -381,9 +396,9 @@ class AudioPlayer {
       'isLocal': isLocal,
       'volume': volume,
       'position': position?.inMilliseconds,
-      'respectSilence': respectSilence,
-      'stayAwake': stayAwake,
-      'recordingActive': recordingActive
+      'respectSilence': respectSilence ?? false,
+      'stayAwake': stayAwake ?? false,
+      'recordingActive': recordingActive ?? false,
     });
 
     if (result == 1) {
@@ -488,19 +503,23 @@ class AudioPlayer {
       String albumTitle,
       String artist,
       String imageUrl,
-      Duration forwardSkipInterval,
-      Duration backwardSkipInterval,
-      Duration duration,
-      Duration elapsedTime}) {
+      Duration forwardSkipInterval = Duration.zero,
+      Duration backwardSkipInterval = Duration.zero,
+      Duration duration = Duration.zero,
+      Duration elapsedTime = Duration.zero,
+      bool hasPreviousTrack = false,
+      bool hasNextTrack = false}) {
     return _invokeMethod('setNotification', {
       'title': title ?? '',
       'albumTitle': albumTitle ?? '',
       'artist': artist ?? '',
       'imageUrl': imageUrl ?? '',
-      'forwardSkipInterval': forwardSkipInterval?.inSeconds ?? 30,
-      'backwardSkipInterval': backwardSkipInterval?.inSeconds ?? 30,
-      'duration': duration?.inSeconds ?? 0,
-      'elapsedTime': elapsedTime?.inSeconds ?? 0
+      'forwardSkipInterval': forwardSkipInterval.inSeconds,
+      'backwardSkipInterval': backwardSkipInterval.inSeconds,
+      'duration': duration.inSeconds,
+      'elapsedTime': elapsedTime.inSeconds,
+      'hasPreviousTrack': hasPreviousTrack,
+      'hasNextTrack': hasNextTrack
     });
   }
 
@@ -555,6 +574,7 @@ class AudioPlayer {
       players.remove(playerId);
       return;
     }
+    if (player == null) return;
 
     final value = callArgs['value'];
 
@@ -593,6 +613,12 @@ class AudioPlayer {
         // ignore: deprecated_member_use_from_same_package
         player.errorHandler?.call(value);
         break;
+      case 'audio.onGotNextTrackCommand':
+        player._commandController.add(PlayerControlCommand.NEXT_TRACK);
+        break;
+      case 'audio.onGotPreviousTrackCommand':
+        player._commandController.add(PlayerControlCommand.PREVIOUS_TRACK);
+        break;
       default:
         _log('Unknown method ${call.method} ');
     }
@@ -627,6 +653,7 @@ class AudioPlayer {
     if (!_errorController.isClosed) futures.add(_errorController.close());
 
     await Future.wait(futures);
+    players.remove(playerId);
   }
 
   Future<int> earpieceOrSpeakersToggle() async {
